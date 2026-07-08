@@ -1,0 +1,4 @@
+azure_subscription_id = "00000000-0000-0000-0000-000000000000"
+azure_location        = "East US"
+admin_username        = "adminuser"
+ssh_public_key_path   = "~/.ssh/your-key.pub"
