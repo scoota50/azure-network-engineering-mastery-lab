@@ -1,4 +1,5 @@
 # Azure Gatekeeper Lab
+# I used AI to help with points I didn't understand like deep python code
 
 Terraform-based Azure lab demonstrating hub-and-spoke networking, centralized routing through an NVA, LDAP authentication, and a serverless Gatekeeper API platform.
 
@@ -155,3 +156,15 @@ Real variable values
 SSH keys
 Credentials
 Deployment ZIP files
+
+## Deployment Verification
+
+The Python health endpoint was packaged and deployed to Azure Functions.
+
+Verified results:
+
+- `GET /api/health` returned HTTP `200`
+- Response body returned Gatekeeper health status
+- Azure successfully discovered the `health` function
+- Request telemetry appeared in Log Analytics `AppRequests`
+- Application Insights recorded successful requests and execution duration
