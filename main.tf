@@ -2,7 +2,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "=4.1.0"
+      version = "=4.81.0"
     }
   }
 }
@@ -18,9 +18,9 @@ resource "azurerm_resource_group" "rg" {
   location = var.azure_location
 }
 
-# Mgmt Hub Virtual Network
+# Mgmt VNet/Hub Virtual Network
 resource "azurerm_virtual_network" "mgmt_vnet" {
-  name                = "vnet-daily-challenge"
+  name                = "vnet-mgmt"
   location            = var.azure_location
   resource_group_name = azurerm_resource_group.rg.name
   address_space       = ["10.100.0.0/16"]
@@ -29,6 +29,37 @@ resource "azurerm_virtual_network" "mgmt_vnet" {
     environment = "Daily Challenge"
   }
 }
+
+# Mgmt VNet/Hub NVA VM
+resource "azurerm_linux_virtual_machine" "nva_vm" {
+  name                = "nva-vm-01"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = var.azure_location
+  size                = "Standard_B1s"
+  admin_username      = "adminuser"
+
+  network_interface_ids = [
+    azurerm_network_interface.nva_nic.id
+  ]
+
+  admin_ssh_key {
+    username   = "adminuser"
+    public_key = file(pathexpand("~/.ssh/firstprojectAZkey.pub"))
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "StandardSSD_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts-gen2"
+    version   = "latest"
+  }
+}
+
 
 # Dev App NSG
 resource "azurerm_network_security_group" "dev_nsg" {
@@ -115,7 +146,7 @@ resource "azurerm_subnet_network_security_group_association" "dev_nsg_assoc" {
   network_security_group_id = azurerm_network_security_group.dev_nsg.id
 }
 
-# Mgmt Hub Public IP for Bastion Host
+# Mgmt VNet/Hub Public IP for Bastion Host
 resource "azurerm_public_ip" "bastion_pip" {
   name                = "pip-bastion"
   location            = azurerm_resource_group.rg.location
@@ -124,16 +155,37 @@ resource "azurerm_public_ip" "bastion_pip" {
   sku                 = "Standard"
 }
 
-# Mgmt Hub Bastion Host
+# Mgmt VNet/Hub Bastion Host
 resource "azurerm_bastion_host" "bastion" {
   name                = "bastion-host"
   location            = var.azure_location
   resource_group_name = azurerm_resource_group.rg.name
+  sku                 = "Standard"
+  tunneling_enabled   = true
 
   ip_configuration {
     name                 = "bastion-ip-config"
     subnet_id            = azurerm_subnet.bastion_subnet.id
     public_ip_address_id = azurerm_public_ip.bastion_pip.id
+  }
+}
+
+# ------------------------------------------------------------
+# Network Interfaces
+# ------------------------------------------------------------
+
+resource "azurerm_network_interface" "nva_nic" {
+  name                = "nva-nic"
+  location            = var.azure_location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_forwarding_enabled = true
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.nva_subnet.id
+    private_ip_address_allocation = "Static"
+    private_ip_address            = "10.100.2.4"
   }
 }
 
@@ -232,9 +284,9 @@ resource "azurerm_linux_virtual_machine" "dev_vm" {
   }
 
   source_image_reference {
-    publisher = "RedHat"
-    offer     = "RHEL"
-    sku       = "9-lvm-gen2"
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts-gen2"
     version   = "latest"
   }
 
@@ -245,12 +297,14 @@ resource "azurerm_linux_virtual_machine" "dev_vm" {
   }
 }
 
-# VNet Peering between Management and Prod Spoke
+# VNet Peering between Prod and Prod Spoke
 resource "azurerm_virtual_network_peering" "mgmt_to_prod" {
   name                      = "peer-mgmt-to-prod"
   resource_group_name       = azurerm_resource_group.rg.name
   virtual_network_name      = azurerm_virtual_network.mgmt_vnet.name
   remote_virtual_network_id = azurerm_virtual_network.prod_vnet.id
+
+  allow_forwarded_traffic = true
 }
 
 resource "azurerm_virtual_network_peering" "prod_to_mgmt" {
@@ -258,6 +312,8 @@ resource "azurerm_virtual_network_peering" "prod_to_mgmt" {
   resource_group_name       = azurerm_resource_group.rg.name
   virtual_network_name      = azurerm_virtual_network.prod_vnet.name
   remote_virtual_network_id = azurerm_virtual_network.mgmt_vnet.id
+
+  allow_forwarded_traffic = true
 }
 
 # VNet Peering between Management and Dev Spoke
@@ -266,6 +322,8 @@ resource "azurerm_virtual_network_peering" "mgmt_to_dev" {
   resource_group_name       = azurerm_resource_group.rg.name
   virtual_network_name      = azurerm_virtual_network.mgmt_vnet.name
   remote_virtual_network_id = azurerm_virtual_network.dev_vnet.id
+
+  allow_forwarded_traffic = true
 }
 
 resource "azurerm_virtual_network_peering" "dev_to_mgmt" {
@@ -273,9 +331,23 @@ resource "azurerm_virtual_network_peering" "dev_to_mgmt" {
   resource_group_name       = azurerm_resource_group.rg.name
   virtual_network_name      = azurerm_virtual_network.dev_vnet.name
   remote_virtual_network_id = azurerm_virtual_network.mgmt_vnet.id
+
+  allow_forwarded_traffic = true
 }
 
-# Mgmt Hub Bastion Subnet
+#------------------------------------------------------------
+# Subnets
+#------------------------------------------------------------
+
+# NVA Subnet
+resource "azurerm_subnet" "nva_subnet" {
+  name                 = "nva-subnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.mgmt_vnet.name
+  address_prefixes     = ["10.100.2.0/24"]
+}
+
+# Mgmt VNet/Hub Bastion Subnet
 resource "azurerm_subnet" "bastion_subnet" {
   name                 = "AzureBastionSubnet" # MUST be exactly this name
   resource_group_name  = azurerm_resource_group.rg.name
@@ -283,7 +355,7 @@ resource "azurerm_subnet" "bastion_subnet" {
   address_prefixes     = ["10.100.0.0/26"] # MUST be /26 or larger
 }
 
-# Mgmt Hub Gateway Subnet
+# Mgmt VNet/Hub Gateway Subnet
 resource "azurerm_subnet" "gateway_subnet" {
   name                 = "GatewaySubnet"
   resource_group_name  = azurerm_resource_group.rg.name
@@ -306,6 +378,49 @@ resource "azurerm_subnet" "mgmt_subnet" {
   resource_group_name  = azurerm_resource_group.rg.name
   virtual_network_name = azurerm_virtual_network.mgmt_vnet.name
   address_prefixes     = ["10.100.10.0/24"]
+}
+
+#------------------------------------------------------------
+# IP ROUTES
+#FROM DEV SPOKE TO PROD SPOKE VIA NVA
+#------------------------------------------------------------
+resource "azurerm_route_table" "dev_rt" {
+  name                = "rt-dev-to-prod"
+  location            = var.azure_location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  route {
+    name                   = "to-prod"
+    address_prefix         = "10.101.10.0/24"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = "10.100.2.4"
+  }
+}
+
+# DEV UDR association to DEV Subnet
+resource "azurerm_subnet_route_table_association" "dev_rt_assoc" {
+  subnet_id      = azurerm_subnet.dev_subnet.id
+  route_table_id = azurerm_route_table.dev_rt.id
+}
+
+#Prod UDR to DEV Spoke via NVA [Subnet]
+resource "azurerm_route_table" "prod_rt" {
+  name                = "rt-prod-to-dev"
+  location            = var.azure_location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  route {
+    name                   = "to-dev"
+    address_prefix         = "10.102.10.0/24"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = "10.100.2.4"
+  }
+}
+
+# Prod UDR association to PROD Subnet
+resource "azurerm_subnet_route_table_association" "prod_rt_assoc" {
+  subnet_id      = azurerm_subnet.prod_subnet.id
+  route_table_id = azurerm_route_table.prod_rt.id
 }
 
 
@@ -349,6 +464,3 @@ resource "azurerm_subnet" "dev_subnet" {
   virtual_network_name = azurerm_virtual_network.dev_vnet.name
   address_prefixes     = ["10.102.10.0/24"]
 }
-
-
-
