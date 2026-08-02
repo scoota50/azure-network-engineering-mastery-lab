@@ -146,8 +146,9 @@ resource "azurerm_subnet_network_security_group_association" "dev_nsg_assoc" {
   network_security_group_id = azurerm_network_security_group.dev_nsg.id
 }
 
-# Mgmt VNet/Hub Public IP for Bastion Host
+# Public IP for Bastion Host
 resource "azurerm_public_ip" "bastion_pip" {
+  count               = var.enable_bastion ? 1 : 0
   name                = "pip-bastion"
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
@@ -155,8 +156,9 @@ resource "azurerm_public_ip" "bastion_pip" {
   sku                 = "Standard"
 }
 
-# Mgmt VNet/Hub Bastion Host
+# Bastion Host
 resource "azurerm_bastion_host" "bastion" {
+  count               = var.enable_bastion ? 1 : 0
   name                = "bastion-host"
   location            = var.azure_location
   resource_group_name = azurerm_resource_group.rg.name
@@ -166,9 +168,10 @@ resource "azurerm_bastion_host" "bastion" {
   ip_configuration {
     name                 = "bastion-ip-config"
     subnet_id            = azurerm_subnet.bastion_subnet.id
-    public_ip_address_id = azurerm_public_ip.bastion_pip.id
+    public_ip_address_id = azurerm_public_ip.bastion_pip[0].id
   }
 }
+
 
 # ------------------------------------------------------------
 # Network Interfaces

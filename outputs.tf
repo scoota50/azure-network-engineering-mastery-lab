@@ -51,12 +51,12 @@ output "dev_vm_private_ip" {
 
 output "bastion_name" {
   description = "Name of the Azure Bastion host"
-  value       = azurerm_bastion_host.bastion.name
+  value       = try(azurerm_bastion_host.bastion[0].name, null)
 }
 
 output "bastion_public_ip" {
   description = "Public IP address used by Azure Bastion"
-  value       = azurerm_public_ip.bastion_pip.ip_address
+  value       = try(azurerm_public_ip.bastion_pip[0].ip_address, null)
 }
 
 # ------------------------------------------------------------

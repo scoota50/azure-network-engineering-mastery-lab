@@ -19,3 +19,9 @@ variable "ssh_public_key_path" {
   description = "Path to the SSH public key for the virtual machines"
   type        = string
 }
+
+variable "enable_bastion" {
+  description = "Create Azure Bastion and its public IP"
+  type        = bool
+  default     = false
+}
