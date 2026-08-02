@@ -168,3 +168,5 @@ Verified results:
 - Azure successfully discovered the `health` function
 - Request telemetry appeared in Log Analytics `AppRequests`
 - Application Insights recorded successful requests and execution duration
+
+Azure Front Door was successfully deployed and tested end to end, then destroyed to stop ongoing lab costs. The Terraform configuration is retained as `front-door.tf.disabled`.
