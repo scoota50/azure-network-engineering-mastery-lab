@@ -134,7 +134,9 @@ resource "azurerm_network_security_group" "prod_nsg" {
   }
 }
 
+#------------------------------------------------------------
 # NSG ASSOCATIONS
+#------------------------------------------------------------
 
 resource "azurerm_subnet_network_security_group_association" "prod_nsg_assoc" {
   subnet_id                 = azurerm_subnet.prod_subnet.id
@@ -146,6 +148,9 @@ resource "azurerm_subnet_network_security_group_association" "dev_nsg_assoc" {
   network_security_group_id = azurerm_network_security_group.dev_nsg.id
 }
 
+#------------------------------------------------------------
+# Bastion Host and Public IP
+#------------------------------------------------------------
 # Public IP for Bastion Host
 resource "azurerm_public_ip" "bastion_pip" {
   count               = var.enable_bastion ? 1 : 0
@@ -382,6 +387,121 @@ resource "azurerm_subnet" "mgmt_subnet" {
   virtual_network_name = azurerm_virtual_network.mgmt_vnet.name
   address_prefixes     = ["10.100.10.0/24"]
 }
+
+#------------------------------------------------------------
+# App Gateway Block
+#------------------------------------------------------------
+# App gateway Subnet
+resource "azurerm_subnet" "appgw_subnet" {
+  name                 = "appgw-subnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.mgmt_vnet.name
+  address_prefixes     = ["10.100.3.0/24"]
+}
+
+#App Gateway Public IP
+resource "azurerm_public_ip" "appgw_pip" {
+  name                = "pip-appgw-gatekeeper"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  allocation_method = "Static"
+  sku               = "Standard"
+}
+
+# App Gateway WAFv2
+resource "azurerm_web_application_firewall_policy" "gatekeeper" {
+  name                = "wafpol-gatekeeper"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  policy_settings {
+    enabled = true
+    mode    = "Detection"
+  }
+
+  managed_rules {
+    managed_rule_set {
+      type    = "OWASP"
+      version = "3.2"
+    }
+  }
+}
+
+# App Gateway
+resource "azurerm_application_gateway" "gatekeeper" {
+  name                = "appgw-gatekeeper"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  http2_enabled       = true
+  firewall_policy_id  = azurerm_web_application_firewall_policy.gatekeeper.id
+
+  sku {
+    name     = "WAF_v2"
+    tier     = "WAF_v2"
+    capacity = 1
+  }
+
+  gateway_ip_configuration {
+    name      = "appgw-ip-config"
+    subnet_id = azurerm_subnet.appgw_subnet.id
+  }
+
+  frontend_ip_configuration {
+    name                 = "appgw-public-frontend"
+    public_ip_address_id = azurerm_public_ip.appgw_pip.id
+  }
+
+  frontend_port {
+    name = "http-port"
+    port = 80
+  }
+
+  backend_address_pool {
+    name = "function-backend-pool"
+
+    fqdns = [
+      "${azurerm_function_app_flex_consumption.gatekeeper.name}.azurewebsites.net"
+    ]
+  }
+
+  probe {
+    name                                      = "function-health-probe"
+    protocol                                  = "Https"
+    path                                      = "/"
+    interval                                  = 30
+    timeout                                   = 30
+    unhealthy_threshold                       = 3
+    pick_host_name_from_backend_http_settings = true
+  }
+
+  backend_http_settings {
+    name                                = "function-https-settings"
+    cookie_based_affinity               = "Disabled"
+    port                                = 443
+    protocol                            = "Https"
+    request_timeout                     = 30
+    probe_name                          = "function-health-probe"
+    pick_host_name_from_backend_address = true
+  }
+
+  http_listener {
+    name                           = "http-listener"
+    frontend_ip_configuration_name = "appgw-public-frontend"
+    frontend_port_name             = "http-port"
+    protocol                       = "Http"
+  }
+
+  request_routing_rule {
+    name                       = "route-to-function"
+    priority                   = 100
+    rule_type                  = "Basic"
+    http_listener_name         = "http-listener"
+    backend_address_pool_name  = "function-backend-pool"
+    backend_http_settings_name = "function-https-settings"
+  }
+}
+
 
 #------------------------------------------------------------
 # IP ROUTES
