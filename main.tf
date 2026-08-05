@@ -394,6 +394,49 @@ resource "azurerm_subnet" "mgmt_subnet" {
   address_prefixes     = ["10.100.10.0/24"]
 }
 
+
+#------------------------------------------------------------
+# Firewall
+#------------------------------------------------------------
+
+resource "azurerm_public_ip" "firewall_pip" {
+  name                = "pip-azfw-mgmt"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_firewall_policy" "main" {
+  name                = "fwpol-mgmt"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  sku                 = "Standard"
+
+  threat_intelligence_mode = "Alert"
+
+  dns {
+    proxy_enabled = true
+  }
+}
+
+resource "azurerm_firewall" "main" {
+  name                = "azfw-mgmt"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  sku_name = "AZFW_VNet"
+  sku_tier = "Standard"
+
+  firewall_policy_id = azurerm_firewall_policy.main.id
+
+  ip_configuration {
+    name                 = "azfw-ip-config"
+    subnet_id            = azurerm_subnet.firewall_subnet.id
+    public_ip_address_id = azurerm_public_ip.firewall_pip.id
+  }
+}
+
 #------------------------------------------------------------
 # App Gateway Block
 #------------------------------------------------------------
@@ -524,6 +567,13 @@ resource "azurerm_route_table" "dev_rt" {
     next_hop_type          = "VirtualAppliance"
     next_hop_in_ip_address = "10.100.2.4"
   }
+
+  route {
+    name                   = "default-to-firewall"
+    address_prefix         = "0.0.0.0/0"
+    next_hop_type          = "VirtualAppliance"
+    next_hop_in_ip_address = azurerm_firewall.main.ip_configuration[0].private_ip_address
+  }
 }
 
 # DEV UDR association to DEV Subnet
@@ -639,17 +689,3 @@ resource "azurerm_private_endpoint" "function" {
 
 }
 
-resource "azapi_update_resource" "function_public_access" {
-  type        = "Microsoft.Web/sites@2025-03-01"
-  resource_id = azurerm_function_app_flex_consumption.gatekeeper.id
-
-  body = {
-    properties = {
-      publicNetworkAccess = "Disabled"
-    }
-  }
-
-  depends_on = [
-    azurerm_private_endpoint.function
-  ]
-}

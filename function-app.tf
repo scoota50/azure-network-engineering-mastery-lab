@@ -6,6 +6,8 @@ resource "azurerm_function_app_flex_consumption" "gatekeeper" {
   location            = azurerm_resource_group.rg.location
   service_plan_id     = azurerm_service_plan.gatekeeper.id
 
+  public_network_access_enabled = false
+
   storage_container_type = "blobContainer"
 
   storage_container_endpoint = join("", [
@@ -22,8 +24,7 @@ resource "azurerm_function_app_flex_consumption" "gatekeeper" {
   instance_memory_in_mb  = 2048
   maximum_instance_count = 10
 
-  public_network_access_enabled = true
-  https_only                    = true
+  https_only = true
 
   site_config {
     application_insights_connection_string = azurerm_application_insights.gatekeeper.connection_string
