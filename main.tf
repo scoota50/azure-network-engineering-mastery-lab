@@ -4,8 +4,14 @@ terraform {
       source  = "hashicorp/azurerm"
       version = "=4.81.0"
     }
+    azapi = {
+      source  = "Azure/azapi"
+      version = "~> 2.10"
+    }
   }
 }
+
+provider "azapi" {}
 
 provider "azurerm" {
   features {}
@@ -586,4 +592,64 @@ resource "azurerm_subnet" "dev_subnet" {
   resource_group_name  = azurerm_resource_group.rg.name
   virtual_network_name = azurerm_virtual_network.dev_vnet.name
   address_prefixes     = ["10.102.10.0/24"]
+}
+
+#------------------------------------------------------------
+# Private Endpoint
+#------------------------------------------------------------
+resource "azurerm_subnet" "private_endpoint_subnet" {
+  name                 = "private-endpoint-subnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.prod_vnet.name
+  address_prefixes     = ["10.101.20.0/24"]
+
+  private_endpoint_network_policies = "Disabled"
+}
+
+resource "azurerm_private_dns_zone" "function" {
+  name                = "privatelink.azurewebsites.net"
+  resource_group_name = azurerm_resource_group.rg.name
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "function_to_mgmt" {
+  name                  = "link-function-dns-to-mgmt"
+  resource_group_name   = azurerm_resource_group.rg.name
+  private_dns_zone_name = azurerm_private_dns_zone.function.name
+  virtual_network_id    = azurerm_virtual_network.mgmt_vnet.id
+}
+
+resource "azurerm_private_endpoint" "function" {
+  name                = "pe-gatekeeper-function"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  subnet_id           = azurerm_subnet.private_endpoint_subnet.id
+
+
+  private_service_connection {
+    name                           = "psc-gatekeeper-function"
+    private_connection_resource_id = azurerm_function_app_flex_consumption.gatekeeper.id
+    subresource_names              = ["sites"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "function-dns-zone-group"
+    private_dns_zone_ids = [azurerm_private_dns_zone.function.id]
+  }
+
+}
+
+resource "azapi_update_resource" "function_public_access" {
+  type        = "Microsoft.Web/sites@2025-03-01"
+  resource_id = azurerm_function_app_flex_consumption.gatekeeper.id
+
+  body = {
+    properties = {
+      publicNetworkAccess = "Disabled"
+    }
+  }
+
+  depends_on = [
+    azurerm_private_endpoint.function
+  ]
 }
