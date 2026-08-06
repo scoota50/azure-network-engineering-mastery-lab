@@ -644,6 +644,29 @@ resource "azurerm_subnet" "dev_subnet" {
   address_prefixes     = ["10.102.10.0/24"]
 }
 
+resource "azurerm_firewall_policy_rule_collection_group" "dev_egress" {
+  name               = "rcg-dev-egress"
+  firewall_policy_id = azurerm_firewall_policy.main.id
+  priority           = 500
+
+  application_rule_collection {
+    name     = "allow-approved-websites"
+    priority = 500
+    action   = "Allow"
+
+    rule {
+      name              = "allow-microsoft"
+      source_addresses  = ["10.102.10.0/24"]
+      destination_fqdns = ["www.microsoft.com"]
+
+      protocols {
+        type = "Https"
+        port = 443
+      }
+    }
+  }
+}
+
 #------------------------------------------------------------
 # Private Endpoint
 #------------------------------------------------------------
