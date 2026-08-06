@@ -667,6 +667,18 @@ resource "azurerm_firewall_policy_rule_collection_group" "dev_egress" {
   }
 }
 
+resource "azurerm_monitor_diagnostic_setting" "firewall" {
+  name                       = "diag-azfw-to-law"
+  target_resource_id         = azurerm_firewall.main.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.gatekeeper.id
+
+  log_analytics_destination_type = "Dedicated"
+
+  enabled_log {
+    category = "AZFWApplicationRule"
+  }
+}
+
 #------------------------------------------------------------
 # Private Endpoint
 #------------------------------------------------------------
