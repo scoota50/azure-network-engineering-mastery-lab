@@ -50,6 +50,14 @@ Azure Function App
 - Application Gateway backend health
 - End-to-end HTTP 200 OK through Application Gateway
 - WAF policy in Detection mode
+## Verified Funcationality
+##6Aug26
+- Azure Firewall deployed in the hub
+- Dev subnet default route sends internet traffic through Azure Firewall
+- Selective outbound access using FQDN application rules
+- Azure Firewall default-deny behavior verified
+- Firewall allow and deny logs sent to Log Analytics
+- KQL used to confirm matched rules and default-deny decisions
 
 Tools
 - Terraform
@@ -59,3 +67,11 @@ Tools
 - Git and GitHub
 - Linux networking tools
 - Azure Monitor and KQL
+
+# COMPLETED FAILURE SCENARIOS
+### Azure Firewall Default Deny
+#6Aug26
+
+- `www.microsoft.com` matched the allow rule and returned HTTP `200`
+- `www.github.com` matched no rule and was denied
+- Log Analytics confirmed the source IP, destination FQDN, rule, and action
