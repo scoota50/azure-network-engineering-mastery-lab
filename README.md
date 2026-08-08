@@ -133,3 +133,20 @@ Azure VPN Gateway
 Hub VNet
     ├── Prod Spoke → 10.101.10.4
     └── Dev Spoke  → 10.102.10.4
+
+    Verified:
+
+On-prem → Prod: 0% packet loss
+On-prem → Dev: 0% packet loss
+Dev → On-prem: 0% packet loss
+Troubleshooting Lesson
+
+A working VPN tunnel does not automatically mean every Azure network is reachable.
+
+For each network path, verify:
+
+The VPN knows the destination CIDR.
+Every intermediate resource allows and forwards the traffic.
+The destination has a valid return path.
+
+This exercise demonstrated VPN traffic selectors, hub gateway transit, spoke routing, and return-path troubleshooting.
