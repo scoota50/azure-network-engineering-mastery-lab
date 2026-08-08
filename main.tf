@@ -318,6 +318,7 @@ resource "azurerm_virtual_network_peering" "mgmt_to_prod" {
   virtual_network_name      = azurerm_virtual_network.mgmt_vnet.name
   remote_virtual_network_id = azurerm_virtual_network.prod_vnet.id
 
+  allow_gateway_transit   = true
   allow_forwarded_traffic = true
 }
 
@@ -327,6 +328,7 @@ resource "azurerm_virtual_network_peering" "prod_to_mgmt" {
   virtual_network_name      = azurerm_virtual_network.prod_vnet.name
   remote_virtual_network_id = azurerm_virtual_network.mgmt_vnet.id
 
+  use_remote_gateways     = true
   allow_forwarded_traffic = true
 }
 
@@ -338,6 +340,7 @@ resource "azurerm_virtual_network_peering" "mgmt_to_dev" {
   remote_virtual_network_id = azurerm_virtual_network.dev_vnet.id
 
   allow_forwarded_traffic = true
+  allow_gateway_transit   = true
 }
 
 resource "azurerm_virtual_network_peering" "dev_to_mgmt" {
@@ -347,6 +350,7 @@ resource "azurerm_virtual_network_peering" "dev_to_mgmt" {
   remote_virtual_network_id = azurerm_virtual_network.mgmt_vnet.id
 
   allow_forwarded_traffic = true
+  use_remote_gateways     = true
 }
 
 #------------------------------------------------------------
@@ -551,6 +555,159 @@ resource "azurerm_application_gateway" "gatekeeper" {
   }
 }
 
+#------------------------------------------------------------
+# fake on-prem network
+#------------------------------------------------------------
+resource "azurerm_virtual_network" "onprem_vnet" {
+  name                = "vnet-onprem-sim"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  address_space       = ["10.200.0.0/16"]
+}
+
+resource "azurerm_subnet" "onprem_subnet" {
+  name                 = "onprem-subnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.onprem_vnet.name
+  address_prefixes     = ["10.200.1.0/24"]
+}
+
+resource "azurerm_public_ip" "onprem_vpn_pip" {
+  name                = "pip-onprem-vpn"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_network_interface" "onprem_vpn_nic" {
+  name                = "nic-onprem-vpn"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  ip_forwarding_enabled = true
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.onprem_subnet.id
+    private_ip_address_allocation = "Static"
+    private_ip_address            = "10.200.1.4"
+    public_ip_address_id          = azurerm_public_ip.onprem_vpn_pip.id
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "onprem_vpn" {
+  name                = "onprem-vpn-01"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_B1s"
+  admin_username      = var.admin_username
+
+  network_interface_ids = [
+    azurerm_network_interface.onprem_vpn_nic.id
+  ]
+
+  disable_password_authentication = true
+
+  admin_ssh_key {
+    username   = var.admin_username
+    public_key = file(pathexpand(var.ssh_public_key_path))
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "Standard_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts-gen2"
+    version   = "latest"
+  }
+}
+
+
+#------------------------------------------------------------
+# Azure VPN
+#------------------------------------------------------------
+resource "azurerm_public_ip" "vpn_gateway_pip" {
+  name                = "pip-vpngw-mgmt"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  allocation_method = "Static"
+  sku               = "Standard"
+  zones             = ["1", "2", "3"]
+}
+
+resource "azurerm_virtual_network_gateway" "mgmt_vpn" {
+  name                = "vpngw-mgmt"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  type       = "Vpn"
+  vpn_type   = "RouteBased"
+  sku        = "VpnGw1AZ"
+  generation = "Generation1"
+
+  active_active = false
+  bgp_enabled   = false
+
+  ip_configuration {
+    name                          = "vpngw-ip-config"
+    subnet_id                     = azurerm_subnet.gateway_subnet.id
+    public_ip_address_id          = azurerm_public_ip.vpn_gateway_pip.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+#IKE/IPSec inbound
+resource "azurerm_network_security_group" "onprem_vpn" {
+  name                = "nsg-onprem-vpn"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  security_rule {
+    name                       = "Allow-IPsec"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Udp"
+    source_port_range          = "*"
+    destination_port_ranges    = ["500", "4500"]
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_local_network_gateway" "onprem" {
+  name                = "lng-onprem-sim"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  gateway_address = azurerm_public_ip.onprem_vpn_pip.ip_address
+  address_space   = ["10.200.0.0/16"]
+}
+
+resource "azurerm_network_interface_security_group_association" "onprem_vpn" {
+  network_interface_id      = azurerm_network_interface.onprem_vpn_nic.id
+  network_security_group_id = azurerm_network_security_group.onprem_vpn.id
+}
+
+#Gateway-to-Gateway VPN connection
+#mgmt to on-prem 
+resource "azurerm_virtual_network_gateway_connection" "onprem" {
+  name                = "conn-mgmt-to-onprem"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+
+  type                       = "IPsec"
+  virtual_network_gateway_id = azurerm_virtual_network_gateway.mgmt_vpn.id
+  local_network_gateway_id   = azurerm_local_network_gateway.onprem.id
+
+  shared_key = var.vpn_shared_key
+}
 
 #------------------------------------------------------------
 # IP ROUTES
@@ -721,6 +878,5 @@ resource "azurerm_private_endpoint" "function" {
     name                 = "function-dns-zone-group"
     private_dns_zone_ids = [azurerm_private_dns_zone.function.id]
   }
-
 }
 
