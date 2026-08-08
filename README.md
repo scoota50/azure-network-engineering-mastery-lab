@@ -75,3 +75,61 @@ Tools
 - `www.microsoft.com` matched the allow rule and returned HTTP `200`
 - `www.github.com` matched no rule and was denied
 - Log Analytics confirmed the source IP, destination FQDN, rule, and action
+
+2026-08-07
+Azure Firewall
+- Added default route
+- Proved default deny
+- Added FQDN allow rule
+- Verified allow/deny in Log Analytics
+
+## Hybrid Connectivity — Site-to-Site IPsec VPN
+**Date: 2026-08-07**
+
+Built a simulated hybrid network between Azure and an on-premises environment using:
+
+- Azure VPN Gateway
+- Local Network Gateway
+- Site-to-Site IPsec/IKEv2 connection
+- Linux strongSwan VPN router
+- Pre-shared key authentication
+
+Traffic path:
+
+```text
+Simulated on-prem network
+10.200.0.0/16
+    ↓
+strongSwan VPN router
+    ↓ IPsec/IKEv2
+Azure VPN Gateway
+    ↓
+vnet-mgmt
+10.100.0.0/16
+
+## Hybrid VPN Gateway Transit to Azure Spokes
+**Date: 2026-08-08**
+
+Extended the Site-to-Site IPsec VPN so the simulated on-premises network can reach both Azure spokes through the hub VPN Gateway.
+
+### Configuration
+
+- Added `10.101.0.0/16` and `10.102.0.0/16` to the strongSwan IPsec traffic selectors.
+- Enabled `allow_gateway_transit = true` on hub-to-spoke peerings.
+- Enabled `use_remote_gateways = true` on spoke-to-hub peerings.
+
+### Verified Traffic Paths
+
+```text
+Simulated On-Prem
+10.200.0.0/16
+    ↓
+strongSwan
+    ↓
+IPsec/IKEv2
+    ↓
+Azure VPN Gateway
+    ↓
+Hub VNet
+    ├── Prod Spoke → 10.101.10.4
+    └── Dev Spoke  → 10.102.10.4
