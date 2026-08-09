@@ -150,3 +150,69 @@ Every intermediate resource allows and forwards the traffic.
 The destination has a valid return path.
 
 This exercise demonstrated VPN traffic selectors, hub gateway transit, spoke routing, and return-path troubleshooting.
+
+
+
+
+
+## BGP Dynamic Routing and Hybrid DNS
+**Date: 2026-08-09**
+
+### BGP over Site-to-Site VPN
+
+Extended the existing Site-to-Site IPsec VPN to support dynamic routing with BGP.
+
+Configuration:
+
+- Azure VPN Gateway ASN: `65010`
+- Azure BGP peer IP: `10.100.0.94`
+- Simulated on-prem ASN: `65020`
+- On-prem BGP router: `10.200.1.4`
+- FRRouting (FRR) used as the on-prem BGP daemon
+- strongSwan continues to provide the IPsec tunnel
+
+Verified Azure advertised the following networks to the on-prem router:
+
+- `10.100.0.0/16` - Hub
+- `10.101.0.0/16` - Prod spoke
+- `10.102.0.0/16` - Dev spoke
+
+Configured outbound BGP filtering so the on-prem router advertises only:
+
+- `10.200.1.0/24`
+
+Verified:
+
+- BGP neighbor Established
+- 3 Azure prefixes received
+- 1 on-prem prefix advertised
+- Azure learned `10.200.1.0/24` with origin `EBgp`
+- On-prem-to-Prod connectivity successful
+- On-prem-to-Dev connectivity successful
+
+Troubleshooting included FRR daemon configuration, BGP route policy, next-hop resolution, and outbound route filtering.
+
+### Hybrid DNS with Azure DNS Private Resolver
+
+Deployed Azure DNS Private Resolver in the hub VNet.
+
+Configuration:
+
+- Resolver: `dnspr-mgmt`
+- Inbound endpoint: `inbound-mgmt`
+- Resolver subnet: `10.100.4.0/28`
+- Resolver inbound IP: `10.100.4.4`
+- Private DNS zone: `privatelink.azurewebsites.net`
+- Function private endpoint: `10.101.20.4`
+
+Verified DNS resolution from the simulated on-prem network across the Site-to-Site VPN:
+
+`func-gatekeeper-cv-20260731.azurewebsites.net`
+→ CNAME to the Private Link hostname
+→ `10.101.20.4`
+
+Verified HTTPS connectivity from simulated on-prem through the hybrid network path to the Function private endpoint with `HTTP 200 OK`.
+
+This validated the complete path:
+
+On-prem → BGP/IPsec → Azure DNS Private Resolver → Private DNS → Private Endpoint → Function App

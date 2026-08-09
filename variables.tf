@@ -25,3 +25,8 @@ variable "enable_bastion" {
   type        = bool
   default     = false
 }
+
+variable "vpn_shared_key" {
+  type      = string
+  sensitive = true
+}

@@ -398,6 +398,51 @@ resource "azurerm_subnet" "mgmt_subnet" {
   address_prefixes     = ["10.100.10.0/24"]
 }
 
+# Azure DNS Private Resolver Subnet
+resource "azurerm_subnet" "dns_resolver_inbound" {
+  name                 = "dns-resolver-inbound-subnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.mgmt_vnet.name
+  address_prefixes     = ["10.100.4.0/28"]
+
+  delegation {
+    name = "Microsoft.Network.dnsResolvers"
+
+    service_delegation {
+      name = "Microsoft.Network/dnsResolvers"
+
+      actions = [
+        "Microsoft.Network/virtualNetworks/subnets/join/action"
+      ]
+    }
+  }
+}
+
+#------------------------------------------------------------
+# DNS RESOLVER
+#------------------------------------------------------------
+#------------------------------------------------------------
+# Azure DNS Private Resolver
+#------------------------------------------------------------
+
+#DNS Private Resolver
+resource "azurerm_private_dns_resolver" "mgmt_resolver" {
+  name                = "dnspr-mgmt"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  virtual_network_id  = azurerm_virtual_network.mgmt_vnet.id
+}
+
+#Azure DNS Private Resolver Endpoint
+resource "azurerm_private_dns_resolver_inbound_endpoint" "mgmt_resolver" {
+  name                    = "inbound-mgmt"
+  location                = azurerm_resource_group.rg.location
+  private_dns_resolver_id = azurerm_private_dns_resolver.mgmt_resolver.id
+
+  ip_configurations {
+    subnet_id = azurerm_subnet.dns_resolver_inbound.id
+  }
+}
 
 #------------------------------------------------------------
 # Firewall
@@ -652,7 +697,11 @@ resource "azurerm_virtual_network_gateway" "mgmt_vpn" {
   generation = "Generation1"
 
   active_active = false
-  bgp_enabled   = false
+  bgp_enabled   = true
+
+  bgp_settings {
+    asn = 65010
+  }
 
   ip_configuration {
     name                          = "vpngw-ip-config"
@@ -688,6 +737,11 @@ resource "azurerm_local_network_gateway" "onprem" {
 
   gateway_address = azurerm_public_ip.onprem_vpn_pip.ip_address
   address_space   = ["10.200.0.0/16"]
+
+  bgp_settings {
+    asn                 = 65020
+    bgp_peering_address = "10.200.1.4"
+  }
 }
 
 resource "azurerm_network_interface_security_group_association" "onprem_vpn" {
@@ -701,6 +755,8 @@ resource "azurerm_virtual_network_gateway_connection" "onprem" {
   name                = "conn-mgmt-to-onprem"
   resource_group_name = azurerm_resource_group.rg.name
   location            = azurerm_resource_group.rg.location
+
+  bgp_enabled = true
 
   type                       = "IPsec"
   virtual_network_gateway_id = azurerm_virtual_network_gateway.mgmt_vpn.id
