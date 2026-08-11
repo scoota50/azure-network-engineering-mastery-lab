@@ -893,7 +893,7 @@ resource "azurerm_monitor_diagnostic_setting" "firewall" {
 }
 
 #------------------------------------------------------------
-# Private Endpoint
+# Private Endpoint (not in dev, but in prod spoke)
 #------------------------------------------------------------
 resource "azurerm_subnet" "private_endpoint_subnet" {
   name                 = "private-endpoint-subnet"
@@ -936,3 +936,321 @@ resource "azurerm_private_endpoint" "function" {
   }
 }
 
+#------------------------------------------------------------
+# Load Balancer + NAT Gateway
+#------------------------------------------------------------
+
+resource "azurerm_subnet" "lb_lab" {
+  name                 = "lb-lab-subnet"
+  resource_group_name  = azurerm_resource_group.rg.name
+  virtual_network_name = azurerm_virtual_network.dev_vnet.name
+  address_prefixes     = ["10.102.20.0/24"]
+}
+
+resource "azurerm_public_ip" "nat_pip" {
+  name                = "pip-nat-dev"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_nat_gateway" "dev" {
+  name                = "natgw-dev"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  sku_name            = "Standard"
+}
+
+resource "azurerm_nat_gateway_public_ip_association" "dev" {
+  nat_gateway_id       = azurerm_nat_gateway.dev.id
+  public_ip_address_id = azurerm_public_ip.nat_pip.id
+}
+
+resource "azurerm_subnet_nat_gateway_association" "dev" {
+  subnet_id      = azurerm_subnet.lb_lab.id
+  nat_gateway_id = azurerm_nat_gateway.dev.id
+}
+
+#------------------------------------------------------------
+# Public Load Balancer
+#------------------------------------------------------------
+
+resource "azurerm_public_ip" "lb_pip" {
+  name                = "pip-lb-dev"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_lb" "dev" {
+  name                = "lb-dev"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  sku                 = "Standard"
+
+  frontend_ip_configuration {
+    name                 = "public-frontend"
+    public_ip_address_id = azurerm_public_ip.lb_pip.id
+  }
+}
+
+resource "azurerm_lb_backend_address_pool" "dev" {
+  name            = "web-backend-pool"
+  loadbalancer_id = azurerm_lb.dev.id
+}
+
+resource "azurerm_lb_probe" "http" {
+  name            = "http-health"
+  loadbalancer_id = azurerm_lb.dev.id
+  protocol        = "Http"
+  port            = 80
+  request_path    = "/"
+}
+
+resource "azurerm_lb_rule" "http" {
+  name                           = "http-rule"
+  loadbalancer_id                = azurerm_lb.dev.id
+  protocol                       = "Tcp"
+  frontend_port                  = 80
+  backend_port                   = 80
+  frontend_ip_configuration_name = "public-frontend"
+  backend_address_pool_ids       = [azurerm_lb_backend_address_pool.dev.id]
+  probe_id                       = azurerm_lb_probe.http.id
+  disable_outbound_snat          = true
+}
+
+#Dev Backend-VM NIC
+resource "azurerm_network_interface" "web01" {
+  name                = "nic-web-vm-01"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.lb_lab.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+#Dev Backend VM NIC 2
+resource "azurerm_network_interface" "web02" {
+  name                = "nic-web-vm-02"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  ip_configuration {
+    name                          = "internal"
+    subnet_id                     = azurerm_subnet.lb_lab.id
+    private_ip_address_allocation = "Dynamic"
+  }
+}
+
+resource "azurerm_network_interface_backend_address_pool_association" "web01" {
+  network_interface_id    = azurerm_network_interface.web01.id
+  ip_configuration_name   = "internal"
+  backend_address_pool_id = azurerm_lb_backend_address_pool.dev.id
+}
+
+resource "azurerm_network_interface_backend_address_pool_association" "web02" {
+  network_interface_id    = azurerm_network_interface.web02.id
+  ip_configuration_name   = "internal"
+  backend_address_pool_id = azurerm_lb_backend_address_pool.dev.id
+}
+
+#Backend VMs
+resource "azurerm_linux_virtual_machine" "web01" {
+  name                = "web-vm-01"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_B1s"
+  admin_username      = "adminuser"
+
+  network_interface_ids = [
+    azurerm_network_interface.web01.id
+  ]
+
+  admin_ssh_key {
+    username   = "adminuser"
+    public_key = file(pathexpand("~/.ssh/firstprojectAZkey.pub"))
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "StandardSSD_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts-gen2"
+    version   = "latest"
+  }
+
+  custom_data = base64encode(<<-EOF
+    #!/bin/bash
+    apt-get update
+    apt-get install -y nginx
+    echo "served-by: web-vm-01" > /var/www/html/index.html
+    systemctl enable nginx
+    systemctl restart nginx
+  EOF
+  )
+}
+
+resource "azurerm_linux_virtual_machine" "web02" {
+  name                = "web-vm-02"
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  size                = "Standard_B1s"
+  admin_username      = "adminuser"
+
+  network_interface_ids = [
+    azurerm_network_interface.web02.id
+  ]
+
+  admin_ssh_key {
+    username   = "adminuser"
+    public_key = file(pathexpand("~/.ssh/firstprojectAZkey.pub"))
+  }
+
+  os_disk {
+    caching              = "ReadWrite"
+    storage_account_type = "StandardSSD_LRS"
+  }
+
+  source_image_reference {
+    publisher = "Canonical"
+    offer     = "0001-com-ubuntu-server-jammy"
+    sku       = "22_04-lts-gen2"
+    version   = "latest"
+  }
+
+  custom_data = base64encode(<<-EOF
+    #!/bin/bash
+    apt-get update
+    apt-get install -y nginx
+    echo "served-by: web-vm-02" > /var/www/html/index.html
+    systemctl enable nginx
+    systemctl restart nginx
+  EOF
+  )
+}
+
+resource "azurerm_network_security_group" "lb_lab" {
+  name                = "nsg-lb-lab"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+
+  security_rule {
+    name                       = "Allow-LB-Health-Probe"
+    priority                   = 100
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "AzureLoadBalancer"
+    destination_address_prefix = "*"
+  }
+
+  security_rule {
+    name                       = "Allow-HTTP-From-Internet"
+    priority                   = 110
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "80"
+    source_address_prefix      = "Internet"
+    destination_address_prefix = "*"
+  }
+}
+
+resource "azurerm_subnet_network_security_group_association" "lb_lab" {
+  subnet_id                 = azurerm_subnet.lb_lab.id
+  network_security_group_id = azurerm_network_security_group.lb_lab.id
+}
+
+#------------------------------------------------------------
+# Azure Front Door
+#------------------------------------------------------------
+#------------------------------------------------------------
+# Azure Front Door
+#------------------------------------------------------------
+
+resource "azurerm_cdn_frontdoor_profile" "lab" {
+  name                = "afd-network-mastery"
+  resource_group_name = azurerm_resource_group.rg.name
+  sku_name            = "Standard_AzureFrontDoor"
+}
+
+resource "azurerm_cdn_frontdoor_endpoint" "lab" {
+  name                     = "afd-network-mastery"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.lab.id
+}
+
+resource "azurerm_cdn_frontdoor_origin_group" "lab" {
+  name                     = "og-lb-dev"
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.lab.id
+
+  health_probe {
+    interval_in_seconds = 30
+    path                = "/"
+    protocol            = "Http"
+    request_type        = "HEAD"
+  }
+
+  load_balancing {
+    additional_latency_in_milliseconds = 0
+    sample_size                        = 4
+    successful_samples_required        = 3
+  }
+}
+
+resource "azurerm_cdn_frontdoor_origin" "lab" {
+  name                          = "origin-lb-dev"
+  cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.lab.id
+
+  enabled                        = true
+  certificate_name_check_enabled = false
+
+  host_name          = azurerm_public_ip.lb_pip.ip_address
+  origin_host_header = azurerm_public_ip.lb_pip.ip_address
+
+  http_port  = 80
+  https_port = 443
+
+  priority = 1
+  weight   = 1000
+}
+
+resource "azurerm_cdn_frontdoor_route" "lab" {
+  name                          = "route-web"
+  cdn_frontdoor_endpoint_id     = azurerm_cdn_frontdoor_endpoint.lab.id
+  cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.lab.id
+  cdn_frontdoor_origin_ids      = [azurerm_cdn_frontdoor_origin.lab.id]
+
+  enabled = true
+
+  supported_protocols    = ["Http", "Https"]
+  patterns_to_match      = ["/*"]
+  forwarding_protocol    = "HttpOnly"
+  https_redirect_enabled = true
+
+  link_to_default_domain = true
+}
+
+#------------------------------------------------------------
+# Network Watcher Packet Capture Storage
+#------------------------------------------------------------
+
+resource "azurerm_storage_account" "network_watcher" {
+  name                     = "stnwpcapcv20260811"
+  resource_group_name      = azurerm_resource_group.rg.name
+  location                 = azurerm_resource_group.rg.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+  account_kind             = "StorageV2"
+}
