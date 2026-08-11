@@ -1,4 +1,5 @@
 # Azure Network Engineering Mastery Lab
+## Pictures included
 
 A Terraform-built Azure environment for learning advanced Azure networking through deployment, packet-path analysis, deliberate failures, troubleshooting, and recovery.
 
