@@ -877,6 +877,22 @@ resource "azurerm_firewall_policy_rule_collection_group" "dev_egress" {
         port = 443
       }
     }
+    rule {
+      name = "allow-network-watcher-storage"
+
+      protocols {
+        type = "Https"
+        port = 443
+      }
+
+      source_addresses = [
+        "10.102.10.4"
+      ]
+
+      destination_fqdns = [
+        "stnwpcapcv20260811.blob.core.windows.net"
+      ]
+    }
   }
 }
 

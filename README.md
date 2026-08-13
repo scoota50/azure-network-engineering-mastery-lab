@@ -217,3 +217,53 @@ Verified HTTPS connectivity from simulated on-prem through the hybrid network pa
 This validated the complete path:
 
 On-prem → BGP/IPsec → Azure DNS Private Resolver → Private DNS → Private Endpoint → Function App
+
+
+
+## Network Watcher – Monitoring and Troubleshooting
+
+**Date: 2026-08-13**
+
+Implemented and validated Azure Network Watcher tooling across the Dev-to-Prod network path.
+
+### Tools Used
+
+* **Next Hop** – verified traffic from `dev-vm-01` to the Prod subnet was routed through the NVA at `10.100.2.4`.
+* **Effective Routes** – confirmed the Dev subnet UDR for `10.101.10.0/24` used the NVA as the next hop.
+* **IP Flow Verify** – confirmed outbound TCP/389 traffic was permitted by Azure network security policy.
+* **Connection Troubleshoot** – validated end-to-end TCP/389 connectivity from Dev to Prod.
+* **Packet Capture** – captured and inspected the actual TCP session in Wireshark, including the SYN → SYN/ACK → ACK three-way handshake.
+* **Connection Monitor** – continuously monitored TCP/389 connectivity between `dev-vm-01` and `prod-vm-01`.
+
+### Break/Fix Scenarios
+
+**NVA unavailable**
+
+* Next Hop initially returned no usable next hop while the NVA VM was deallocated.
+* Starting the NVA restored the expected `VirtualAppliance` next hop at `10.100.2.4`.
+
+**Destination unavailable**
+
+* Connection Troubleshoot reported the TCP/389 path as unreachable while `prod-vm-01` was deallocated.
+* Starting the Prod VM restored connectivity.
+
+**Packet capture upload blocked by Azure Firewall**
+
+* Network Watcher successfully created the capture, but the `.cap` file did not appear in Azure Storage.
+* Log Analytics query results in `AZFWApplicationRule` showed traffic from `10.102.10.4` to the packet-capture Storage FQDN being denied by the Azure Firewall default action.
+* Added a narrowly scoped HTTPS/443 application rule allowing only the required Storage FQDN.
+* Retested connectivity to Azure Storage and received an HTTP response, confirming the network path was restored.
+* Re-ran Packet Capture and successfully stored the `.cap` file in the `network-watcher-logs` container.
+
+**Connection Monitor failure and recovery**
+
+* Established a healthy TCP/389 baseline between Dev and Prod.
+* Deallocated the NVA while leaving the UDR unchanged.
+* Connection Monitor changed from **Pass** to **Fail**, demonstrating that a valid route configuration does not guarantee a working data plane.
+* Restarted the NVA and observed Connection Monitor return to **Pass**.
+
+### Key Troubleshooting Lesson
+
+A configured route or security rule only proves the intended control-plane state. Network Watcher tools were used together to validate the actual data plane:
+
+`Route decision → Security decision → End-to-end connectivity → Packet evidence → Continuous monitoring`=-e
